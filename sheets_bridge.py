@@ -1,5 +1,7 @@
 import os
 import sys
+import warnings
+warnings.filterwarnings("ignore")
 import json
 import re
 import argparse
@@ -46,7 +48,7 @@ def parse_drive_link(link):
         return match.group(1)
     return link
 
-def list_folders(root_link):
+def list_folders(root_link, printer=print):
     creds = get_creds()
     service = build('drive', 'v3', credentials=creds)
     root_id = parse_drive_link(root_link)
@@ -55,9 +57,9 @@ def list_folders(root_link):
     results = service.files().list(q=query, pageSize=50, fields="files(id, name)").execute()
     items = results.get('files', [])
     
-    print(json.dumps(items))
+    printer(items)
 
-def get_data(folder_link, output_dir=None):
+def get_data(folder_link, output_dir=None, printer=print):
     creds = get_creds()
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
@@ -70,7 +72,7 @@ def get_data(folder_link, output_dir=None):
     items = results.get('files', [])
 
     if not items:
-        print(json.dumps({"error": "Folder is empty or not accessible."}))
+        printer({"error": "Folder is empty or not accessible."})
         return
 
     sheet_id = None
@@ -87,7 +89,7 @@ def get_data(folder_link, output_dir=None):
             wav_name = item['name']
 
     if not sheet_id:
-        print(json.dumps({"error": "No Google Sheet found in the folder."}))
+        printer({"error": "No Google Sheet found in the folder."})
         return
 
     # Download WAV if found and output_dir is provided
@@ -161,14 +163,35 @@ def get_data(folder_link, output_dir=None):
                     "row_index": i + 1
                 })
 
-    print(json.dumps(output_data))
+    printer(output_data)
 
-def update_data(sheet_id, regions_json_path):
+def col_to_letter(n):
+    string = ""
+    while n >= 0:
+        string = chr((n % 26) + 65) + string
+        n = (n // 26) - 1
+    return string
+
+def update_data(sheet_id, regions_json_path, printer=print):
     creds = get_creds()
     service = build('sheets', 'v4', credentials=creds)
 
     with open(regions_json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
+
+    # Read the header row to find 'in' and 'out' columns
+    header_values = service.spreadsheets().values().get(
+        spreadsheetId=sheet_id, range="A1:Z1").execute().get('values', [])
+    
+    in_col_letter = "L"
+    out_col_letter = "M"
+
+    if header_values and header_values[0]:
+        header = [str(c).lower() for c in header_values[0]]
+        if "in" in header:
+            in_col_letter = col_to_letter(header.index("in"))
+        if "out" in header:
+            out_col_letter = col_to_letter(header.index("out"))
 
     current_values = service.spreadsheets().values().get(
         spreadsheetId=sheet_id, range="A:A").execute().get('values', [])
@@ -189,13 +212,27 @@ def update_data(sheet_id, regions_json_path):
         start = region['start']
         end = region['end']
         
+        # Round values to 1 decimal place and force dot separator
+        try:
+            # Format as string with 1 decimal place, forcing dot
+            start = "{:.1f}".format(float(start))
+            end = "{:.1f}".format(float(end))
+        except (ValueError, TypeError):
+            # Keep original if not a number
+            pass
+        
         # Get the next available row index for this name
         if name in name_to_rows and name_to_rows[name]:
             row_idx = name_to_rows[name].pop(0) # Consume the index
             
+            # Add updates for IN and OUT columns separately since they might not be adjacent
             data_to_update.append({
-                'range': f"L{row_idx}:M{row_idx}",
-                'values': [[start, end]]
+                'range': f"{in_col_letter}{row_idx}",
+                'values': [[start]]
+            })
+            data_to_update.append({
+                'range': f"{out_col_letter}{row_idx}",
+                'values': [[end]]
             })
 
     if data_to_update:
@@ -205,9 +242,9 @@ def update_data(sheet_id, regions_json_path):
         }
         result = service.spreadsheets().values().batchUpdate(
             spreadsheetId=sheet_id, body=body).execute()
-        print(json.dumps({"status": "success", "updatedCells": result.get('totalUpdatedCells')}))
+        printer({"status": "success", "updatedCells": result.get('totalUpdatedCells')})
     else:
-        print(json.dumps({"status": "no_changes"}))
+        printer({"status": "no_changes"})
 
 if __name__ == '__main__':
     # Force UTF-8 output for Windows consoles
@@ -225,13 +262,37 @@ if __name__ == '__main__':
     update_parser = subparsers.add_parser('update')
     update_parser.add_argument('sheet_id', help='Google Sheet ID')
     update_parser.add_argument('json_path', help='Path to JSON file with new regions')
+    
+    # Global output argument
+    parser.add_argument('--output-file', help='Path to write output JSON to (avoids console encoding issues)', default=None)
 
     args = parser.parse_args()
 
+    # Helper to print JSON
+    def print_output(data):
+        json_str = json.dumps(data, ensure_ascii=False)
+        if args.output_file:
+            with open(args.output_file, 'w', encoding='utf-8') as f:
+                f.write(json_str)
+        else:
+            print(json_str)
+
+    # Monkey patch print used for JSON output
+    # checking where print is used: lines 58, 73, 90, 164, 208, 210
+    # I will replace the main logic calls to redirect their output or modify functions to return data instead of printing.
+    # Actually, easier to let functions print but intercept it? No, better to pass the printer or change functions.
+    # Let's change the functions to return data or accept a callback?
+    # Minimal change: Update the functions to use a global printer or just change the print calls in them?
+    # I can't easily change all print calls with one replace_file_content if they are scattered.
+    # I will redefine the functions in the original file to use the new output mechanism.
+    # Wait, I can just modify the functions.
+
     if args.command == 'get':
         # Use SCRIPT_DIR to avoid writing to ProgramData
-        get_data(args.folder_link, SCRIPT_DIR)
+        get_data(args.folder_link, SCRIPT_DIR, printer=print_output)
     elif args.command == 'list':
-        list_folders(args.root_link)
+        list_folders(args.root_link, printer=print_output)
     elif args.command == 'update':
-        update_data(args.sheet_id, args.json_path)
+        update_data(args.sheet_id, args.json_path, printer=print_output)
+
+

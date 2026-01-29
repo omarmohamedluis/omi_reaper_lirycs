@@ -15,8 +15,9 @@ local DEFAULT_ROOT = "https://drive.google.com/drive/folders/1iB9EVvTVrNrPU1Fy_K
 
 function run_python(cmd, arg1)
   local temp_file = script_path .. "py_out.txt"
-  -- Quote args carefully and redirect stderr (2>&1)
-  local command = string.format('python "%s" %s "%s" > "%s" 2>&1', python_script, cmd, arg1, temp_file)
+  -- Use --output-file argument to let Python write UTF-8 directly, avoiding shell redirection issues
+  -- NOTE: Global arguments must come BEFORE the subcommand for argparse!
+  local command = string.format('python "%s" --output-file "%s" %s "%s"', python_script, temp_file, cmd, arg1)
   os.execute(command)
   
   local f = io.open(temp_file, "r")
@@ -122,6 +123,33 @@ function main()
   if wav_path then wav_path = wav_path:gsub("\\\\", "\\") end
 
   reaper.Undo_BeginBlock()
+
+  -- Configure Project Settings (Time Format, FPS, Snap)
+  msg("--- Applying Project Settings ---")
+  
+  -- 1. Time Format: Hours:Minutes:Seconds:Frames
+  msg("Setting Time Format to H:M:S:F (Cmd 40035)")
+  reaper.Main_OnCommand(40035, 0)
+  
+  -- 2. Disable Secondary Time Unit (Set to None)
+  msg("Setting Secondary Time Unit to None (Cmd 42358)")
+  reaper.Main_OnCommand(42358, 0)
+
+  -- 3. Enable Snap (if disabled)
+  local snap_state = reaper.GetToggleCommandState(1157)
+  msg("Snap State: " .. tostring(snap_state))
+  if snap_state == 0 then
+    msg("Enabling Snap (Cmd 1157)")
+    reaper.Main_OnCommand(1157, 0)
+  else
+    msg("Snap already enabled.")
+  end
+
+  -- 4. Set Project FPS to 25
+  msg("Setting Project FPS to 25 (Cmd 40925)")
+  reaper.Main_OnCommand(40925, 0)
+  
+  msg("--- Settings Applied ---")
   
   -- Import WAV
   if wav_path and wav_path ~= "null" and reaper.file_exists(wav_path) then
