@@ -110,14 +110,19 @@ def get_data(folder_link, output_dir=None, printer=print):
             name, ext = os.path.splitext(safe_name)
             local_wav_path = os.path.join(output_dir, f"{name}_{int(time.time())}{ext}")
 
-        request = drive_service.files().get_media(fileId=wav_id)
+        if os.path.exists(local_wav_path) and os.path.getsize(local_wav_path) > 0:
+             # File exists and is not empty, skip download
+             pass
+        else:
+             # Download needed
+             request = drive_service.files().get_media(fileId=wav_id)
         
-        fh = io.FileIO(local_wav_path, 'wb')
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while done is False:
-            status, done = downloader.next_chunk()
-        fh.close()
+             fh = io.FileIO(local_wav_path, 'wb')
+             downloader = MediaIoBaseDownload(fh, request)
+             done = False
+             while done is False:
+                 status, done = downloader.next_chunk()
+             fh.close()
 
     # 2. Read Data
     result = sheets_service.spreadsheets().values().get(
