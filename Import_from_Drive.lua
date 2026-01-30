@@ -151,7 +151,8 @@ function process_selected_folder(selected_folder)
   
   msg("--- Settings Applied ---")
   
-  -- Import WAV
+
+    -- Import WAV
   if wav_path and wav_path ~= "null" and reaper.file_exists(wav_path) then
       local track = reaper.GetTrack(0, 0)
       if not track then
